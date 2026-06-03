@@ -29,7 +29,16 @@ def run_training():
     X_train_a1 = base_df[features_a1]
     y_train_log = np.log1p(base_df['price'])
     
-    model_a1 = lgb.LGBMRegressor(n_estimators=300, learning_rate=0.05, random_state=RANDOM_SEED, n_jobs=-1)
+    # UPDATE: Menggunakan Parameter Terbaik Hasil Optuna!
+    model_a1 = lgb.LGBMRegressor(
+        n_estimators=300, 
+        learning_rate=0.08, 
+        num_leaves=47, 
+        max_depth=11, 
+        min_child_samples=61,
+        random_state=RANDOM_SEED, 
+        n_jobs=-1
+    )
     model_a1.fit(X_train_a1, y_train_log)
     
     joblib.dump(model_a1, os.path.join("models", "global_model.pkl"))
@@ -63,9 +72,17 @@ def run_training():
     features_a2 = [col for col in base_df_a2.columns if col not in ['price', 'log_price']]
     X_train_a2 = base_df_a2[features_a2]
     
-    model_a2 = lgb.LGBMRegressor(n_estimators=300, learning_rate=0.05, random_state=RANDOM_SEED, n_jobs=-1)
+    model_a2 = lgb.LGBMRegressor(
+        n_estimators=300, 
+        learning_rate=0.06, 
+        num_leaves=84, 
+        max_depth=12, 
+        min_child_samples=26,
+        random_state=RANDOM_SEED, 
+        n_jobs=-1
+    )
     model_a2.fit(X_train_a2, y_train_log)
-    
+   
     joblib.dump(model_a2, os.path.join("models", "entity_model.pkl"))
     print("[SUCCESS] Approach 2 Model and Stats saved.")
     print("\n=== ALL MODELS TRAINED SUCCESSFULLY ===")

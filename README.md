@@ -4,6 +4,18 @@ This repository contains a robust, production-grade price reconstruction pipelin
 
 ---
 
+## 🧠 Approach & Methodology
+
+Our solution tackles the missing price imputation problem through a three-stage architecture:
+
+1. **Robust Feature Engineering** — Extracting cyclical temporal patterns (hour/day), managing skewed distributions via log transformations ($\log_{1p}$), and engineering relative pricing boundaries (`item_price_min`/`max` ratios) to capture inherent item value.
+
+2. **Bayesian Hyperparameter Optimization** — Utilizing Optuna to dynamically tune LightGBM parameters (e.g., heavily restricting `min_child_samples` to prevent overfitting on long-tail, low-frequency shops).
+
+3. **Dynamic Anchor Calibration (Post-Processing)** — Leveraging the 100 surviving anchor samples on the outage day to calculate a real-time market shift multiplier, effectively bridging historical model knowledge with live macro-economic realities.
+
+---
+
 ## 🚀 Quick Start & Execution Guide
 
 ### 1. Environment Setup
@@ -13,77 +25,79 @@ Ensure you have Python 3.9+ installed, then set up the environment and install d
 ```bash
 # Create and activate virtual environment
 python -m venv .venv
-source .venv/Scripts/activate
+source .venv/Scripts/activate  # Windows
+# source .venv/bin/activate    # Linux/Mac
 
 # Install required packages
 pip install -r requirements.txt
 ```
 
-### 2. Run Training Pipeline (Fits Both Approaches)
+### 2. Run Training Pipeline
 
-To clean raw historical data, engineer features with zero-division protections, and train both the Tier 1 Global Model and Tier 2 Entity Model:
+To clean raw historical data, engineer features with zero-division protections, and fit both the Tier 1 (Global) and Tier 2 (Entity-Specific) LightGBM models:
 
 ```bash
 python run_pipeline.py --mode train
 ```
 
-### 3. Run Inference Pipeline
+> This will generate `global_model.pkl`, `entity_model.pkl`, and `entity_stats.pkl` inside the `models/` directory.
 
-The inference engine automatically detects the 100 anchor samples inside the test file to calculate live market shifts, then calibrates and populates the missing prices.
+### 3. Run Inference Pipeline (Predicting Missing Data)
 
-- **Run Approach 1** (Global Marketplace Model - Recommended):
+The inference engine automatically isolates the 100 anchor samples present in the test file, calculates live market shifts, and imputes the missing prices.
 
-  ```bash
-  python run_pipeline.py --mode infer \
-    --input data/raw/ecommerce_price_prediction-train.csv \
-    --output data/processed/submission_global.csv \
-    --approach global
-  ```
+**Approach 1 — Global Marketplace Model (RECOMMENDED):**
 
-- **Run Approach 2** (Shop/Product Level Model):
+```bash
+python run_pipeline.py --mode infer \
+  --input data/raw/ecommerce_price_prediction-test-3-days.csv \
+  --output submission_global.csv \
+  --approach global
+```
 
-  ```bash
-  python run_pipeline.py --mode infer \
-    --input data/raw/ecommerce_price_prediction-train.csv \
-    --output data/processed/submission_entity.csv \
-    --approach entity
-  ```
+**Approach 2 — Shop/Product Level Model (for audit/comparison):**
+
+```bash
+python run_pipeline.py --mode infer \
+  --input data/raw/ecommerce_price_prediction-test-3-days.csv \
+  --output submission_entity.csv \
+  --approach entity
+```
 
 ---
 
 ## 📊 Validation Framework & Key Findings
 
-We implemented a strict **Time-Based Validation Split** (isolating the final scraping date, `2025-03-22`, as a simulated outage day) to rigorously test both architectures before evaluating hidden test data.
+We implemented a strict **Time-Based Validation Split** (isolating the final scraping date of the training set as a simulated outage day) to rigorously test both architectures before evaluating them on hidden test data.
 
 ### Performance Summary
 
-| Approach | Description | MAPE |
-|---|---|---|
-| **Approach 1** | Global Marketplace Model + Macro Calibration | **0.97%** ✅ |
-| **Approach 2** | Shop/Product Level Model + Granular Calibration | 1.43% |
+| Approach | Description | Evaluated MAPE | Evaluated MAE |
+|----------|-------------|----------------|---------------|
+| Approach 1 | Global Marketplace Model + Macro Calibration | **0.71% ✅** | ~181,917 IDR |
+| Approach 2 | Shop/Product Level Model + Granular Calibration | 0.86% | ~335,265 IDR |
 
-### Critical Engineering Trade-offs & Retrospective
+### Critical Engineering Trade-offs & Production Decision
 
-**1. Why the Global Model Outperformed the Entity Model:**
+Based on empirical validation, **Approach 1 (Global Model)** is explicitly recommended for final production deployment.
 
-- **The Small-Sample Calibration Trap:** While Approach 2 attempts a highly personalized shop-level calibration, fragmenting the 100 anchor samples across 219 unique shops leaves most entities with only 1–2 reference points. Calculating a median shift factor from such a sparse sample introduces severe variance, causing the model to overfit to micro-level pricing noise on the outage day.
+1. **The Complexity & Small-Sample Trap** — While Approach 2 attempts a highly personalized shop-level prediction using historical priors (`historical_shop_price_mean`), it suffers from extreme data sparsity. Distributing the 100 anchor samples across hundreds of unique shops leaves most entities with 0–1 reference points. Calculating a calibration multiplier from a single observation introduces severe variance, causing the Tier 2 model to overfit to micro-level pricing noise.
 
-- **Stable Historical Corridors:** Our Exploratory Data Analysis (EDA) revealed that `item_price_min` and `item_price_max` serve as exceptionally strong linear anchors for price predictability. The Global LightGBM model utilizes these boundaries effectively without introducing entity-specific data sparsity noise.
+2. **Stable Historical Corridors** — Our EDA revealed that global pricing boundaries (`item_price_min` and `item_price_max`) serve as exceptionally strong linear anchors. The Global LightGBM model utilizes these boundaries effectively without introducing the noise of sparse, low-frequency shops.
 
-**2. Production Safeguards Implemented:**
-
-- **Numerical Instability Fix:** Items with single variants create a flat denominator boundary (`max - min == 0`), which natively causes standard scaling formulas to blow up to numerical scales of $10^{14}$. Our pipeline applies a safe vectorized clamp to ensure stability.
-
-- **Cold-Start Defense:** For Approach 2, any shop or product encountered during test-time with insufficient history is automatically protected via a fallback hierarchy that routes its reference metrics back to macro global priors.
+3. **Production Safeguards Implemented:**
+   - **Numerical Instability Fix** — Items with single variants create a flat denominator boundary (`max - min == 0`), which natively causes standard scaling formulas to explode. Our pipeline applies a safe vectorized clamp ($+1 \times 10^{-5}$) to ensure mathematical stability.
+   - **Multilevel Cold-Start Defense** — For Approach 2, any shop or product encountered during test-time with insufficient history is automatically protected via a fallback hierarchy (`.fillna(global_mean)`), ensuring the pipeline never breaks in production.
 
 ---
 
 ## 📁 Repository Structure
 
 | File | Description |
-|---|---|
-| `src/data_loader.py` | Handles file ingestion, basic formatting, and high-sparsity column pruning. |
-| `src/features.py` | Executes temporal cyclical encoding, pricing boundary indexes, and strict LightGBM categorical casting. |
-| `src/train.py` | Fits and serializes both model candidates. |
-| `src/inference.py` | Isolates anchor samples dynamically, computes calibration ratios, and fills missing pricing payloads. |
-| `run_pipeline.py` | Unified Command-Line Interface (CLI) for production operations. |
+|------|-------------|
+| `notebooks/` | Contains `01_eda.ipynb` and `02_validation.ipynb` detailing research, Optuna tuning, and hypothesis testing. |
+| `src/data_loader.py` | Handles file ingestion, datetime casting, and basic formatting. |
+| `src/features.py` | Executes temporal cyclical encoding, pricing boundary indexes, and zero-division scaling protections. |
+| `src/train.py` | Fits and serializes both the baseline and entity-conditioned LightGBM models. |
+| `src/inference.py` | Handles dynamic anchor-set isolation, computes multi-level calibration ratios, and writes final CSV payloads. |
+| `run_pipeline.py` | Unified CLI for executing training and inference operations. |
