@@ -8,4 +8,4 @@ __pycache__/
 .vscode/
 
 # Large data and model artifacts
-data/
+data/raw/
